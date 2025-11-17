@@ -1,108 +1,306 @@
-name: High Speed HTTP Proxy
+name: HTTP Injector Server
 
 on:
-  workflow_dispatch:  # Esto permite ejecución manual
+  workflow_dispatch:
 
 jobs:
-  http-proxy:
+  http-injector:
     runs-on: windows-latest
     timeout-minutes: 15
 
     steps:
     - name: Install Tailscale
       run: |
+        Write-Host "🔧 Instalando Tailscale..."
         $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
         $installerPath = "$env:TEMP\tailscale.msi"
         Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
         Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-proxy-$env:GITHUB_RUN_ID
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-injector-$env:GITHUB_RUN_ID
         Start-Sleep -Seconds 10
         $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+        Write-Host "✅ Tailscale IP: $tsIP"
 
-    - name: Install and Configure HTTP Proxy
+    - name: Create HTTP Injector Server
       run: |
-        # Descargar e instalar proxy ligero (3proxy)
-        $proxyUrl = "https://github.com/3proxy/3proxy/releases/download/0.9.4/3proxy-0.9.4-x64.zip"
-        $proxyPath = "$env:TEMP\3proxy.zip"
-        $installDir = "C:\3proxy"
+        Write-Host "🛠️ Creando servidor HTTP Injector..."
         
-        Write-Host "📥 Descargando proxy..."
-        Invoke-WebRequest -Uri $proxyUrl -OutFile $proxyPath
+        # Crear directorio de trabajo
+        $serverDir = "C:\http-injector"
+        New-Item -ItemType Directory -Path $serverDir -Force
         
-        # Crear directorio
-        New-Item -ItemType Directory -Path $installDir -Force
+        # Crear script del servidor Python
+        $serverScript = @"
+import http.server
+import socketserver
+import ssl
+import sys
+import threading
+from datetime import datetime
+
+class InjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
+    
+    def do_GET(self):
+        # Servir payloads según la ruta
+        if self.path == '/payload.txt':
+            self.serve_payload()
+        elif self.path == '/config.ini':
+            self.serve_config()
+        elif self.path == '/status':
+            self.serve_status()
+        else:
+            self.serve_index()
+    
+    def serve_payload(self):
+        payload = '''# 🚀 HTTP Injector Payload - GitHub Actions
+# 📍 Server: $env:TAILSCALE_IP
+# ⏰ Created: $(Get-Date)
+
+[CONNECTIONS]
+CONNECT [host_port] [protocol][split][ua] HTTP/1.1
+
+[HEADERS]
+Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+[REQUESTS]
+GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+[REAL_REQUESTS]
+GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+[PROXY_REQUESTS]
+GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+[SPLITTERS]
+[split][crlf]
+
+[PORTS]
+80,8080,443,53
+
+[PROTOCOLS]
+http://
+
+[METHODS]
+CONNECT, GET, POST
+
+[ENCODINGS]
+
+[REDIRECTS]
+
+[PROXIES]
+
+[USERAGENTS]
+'''
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(payload.encode())
+    
+    def serve_config(self):
+        config = '''[SERVER]
+host = $env:TAILSCALE_IP
+port = 8080
+ssl_port = 8443
+
+[PAYLOAD]
+url = http://$env:TAILSCALE_IP:8080/payload.txt
+update_interval = 3600
+
+[SETTINGS]
+timeout = 30
+max_connections = 1000
+'''
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(config.encode())
+    
+    def serve_status(self):
+        status = f"HTTP Injector Server - Online\nIP: $env:TAILSCALE_IP\nTime: {datetime.now()}\nStatus: ✅ ACTIVE"
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(status.encode())
+    
+    def serve_index(self):
+        html = '''<!DOCTYPE html>
+<html>
+<head>
+    <title>🚀 HTTP Injector Server</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #0d1117; color: #c9d1d9; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .card { background: #161b22; padding: 20px; margin: 10px 0; border-radius: 8px; border: 1px solid #30363d; }
+        .btn { display: inline-block; padding: 10px 20px; margin: 5px; background: #238636; color: white; text-decoration: none; border-radius: 6px; }
+        .info { background: #0c2d6b; padding: 15px; border-radius: 6px; }
+        .payload { background: #1a1f2e; padding: 15px; border-radius: 6px; font-family: monospace; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 HTTP Injector Server</h1>
         
-        # Extraer y configurar
-        Expand-Archive -Path $proxyPath -DestinationPath $installDir -Force
-        
-        # Generar password aleatorio
-        Add-Type -AssemblyName System.Web
-        $proxyPass = [System.Web.Security.Membership]::GeneratePassword(12, 2)
-        echo "PROXY_PASSWORD=$proxyPass" >> $env:GITHUB_ENV
-        
-        # Crear configuración del proxy
-        $configContent = @"
-daemon
-nserver 8.8.8.8
-nserver 1.1.1.1
-timeouts 1 5 30 60 180 1800 15 60
-auth strong
-users proxy:CL:$proxyPass
-allow proxy
-proxy -p3128 -i0.0.0.0 -e$env:TAILSCALE_IP
-socks -p1080 -i0.0.0.0 -e$env:TAILSCALE_IP
+        <div class="card info">
+            <h3>📡 Server Information</h3>
+            <p><strong>IP:</strong> $env:TAILSCALE_IP</p>
+            <p><strong>HTTP Port:</strong> 8080</p>
+            <p><strong>HTTPS Port:</strong> 8443</p>
+            <p><strong>Status:</strong> ✅ Online</p>
+        </div>
+
+        <div class="card">
+            <h3>📥 Download Resources</h3>
+            <a class="btn" href="/payload.txt">📄 Payload File</a>
+            <a class="btn" href="/config.ini">⚙️ Config File</a>
+            <a class="btn" href="/status">📊 Server Status</a>
+        </div>
+
+        <div class="card">
+            <h3>🔧 HTTP Injector Configuration</h3>
+            <div class="payload">
+<strong>Payload URL:</strong> http://$env:TAILSCALE_IP:8080/payload.txt
+
+<strong>Manual Config:</strong>
+- Host: $env:TAILSCALE_IP
+- Port: 8080
+- Payload: Download from above
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>📱 How to Use</h3>
+            <ol>
+                <li>Download payload file</li>
+                <li>Open HTTP Injector app</li>
+                <li>Add new configuration</li>
+                <li>Use payload URL or manual config</li>
+                <li>Connect and enjoy! 🎉</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>'''
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(html.encode())
+
+def run_http_server():
+    with socketserver.TCPServer(("", 8080), InjectorHTTPHandler) as httpd:
+        print("🚀 HTTP Server running on port 8080")
+        httpd.serve_forever()
+
+def run_https_server():
+    with socketserver.TCPServer(("", 8443), InjectorHTTPHandler) as httpd:
+        httpd.socket = ssl.wrap_socket(httpd.socket, certfile='./cert.pem', server_side=True)
+        print("🔒 HTTPS Server running on port 8443")
+        httpd.serve_forever()
+
+# Generar certificado SSL auto-firmado
+import subprocess
+subprocess.run(['openssl', 'req', '-new', '-x509', '-keyout', 'cert.pem', '-out', 'cert.pem', '-days', '365', '-nodes', '-subj', '/CN=localhost'], shell=True)
+
+# Ejecutar servidores en hilos separados
+http_thread = threading.Thread(target=run_http_server)
+https_thread = threading.Thread(target=run_https_server)
+
+http_thread.daemon = True
+https_thread.daemon = True
+
+http_thread.start()
+https_thread.start()
+
+print("🎯 Servidores HTTP/HTTPS iniciados!")
+print("📡 Serviendo payloads en:")
+print("   HTTP:  http://$env:TAILSCALE_IP:8080")
+print("   HTTPS: https://$env:TAILSCALE_IP:8443")
+
+# Mantener el script corriendo
+import time
+while True:
+    time.sleep(1)
 "@
-        
-        $configContent | Out-File -FilePath "$installDir\3proxy.cfg" -Encoding ASCII
-        Write-Host "✅ Proxy configurado"
 
-    - name: Configure Firewall for Proxy
-      run: |
-        # Abrir puertos para el proxy
-        netsh advfirewall firewall add rule name="HTTP Proxy" dir=in action=allow protocol=TCP localport=3128
-        netsh advfirewall firewall add rule name="SOCKS Proxy" dir=in action=allow protocol=TCP localport=1080
-        Write-Host "🔥 Puertos 3128 (HTTP) y 1080 (SOCKS) abiertos"
-
-    - name: Start Proxy Server
-      run: |
-        Write-Host "🚀 Iniciando servidor proxy..."
-        $installDir = "C:\3proxy"
+        # Guardar script del servidor
+        $serverScript | Out-File -FilePath "$serverDir\injector_server.py" -Encoding UTF8
         
-        # Iniciar proxy en segundo plano
-        Start-Process -FilePath "$installDir\3proxy.exe" -ArgumentList "$installDir\3proxy.cfg" -WindowStyle Hidden
+        Write-Host "✅ Servidor HTTP Injector creado"
+
+    - name: Install Python and Dependencies
+      run: |
+        Write-Host "🐍 Instalando Python y dependencias..."
+        
+        # Instalar Python si no está presente
+        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+            Write-Host "📥 Descargando Python..."
+            $pythonUrl = "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
+            $pythonInstaller = "$env:TEMP\python-installer.exe"
+            Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonInstaller
+            Start-Process -FilePath $pythonInstaller -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0" -Wait
+        }
+        
+        # Instalar OpenSSL para certificados
+        & "$env:ProgramFiles\Git\usr\bin\curl" -L -o openssl.zip https://github.com/openssl/openssl/archive/refs/tags/openssl-3.0.7.zip
+        if (Test-Path openssl.zip) {
+            Expand-Archive -Path openssl.zip -DestinationPath "C:\openssl" -Force
+        }
+
+    - name: Configure Firewall
+      run: |
+        Write-Host "🔥 Configurando firewall..."
+        # Abrir puertos para el servidor HTTP Injector
+        netsh advfirewall firewall add rule name="HTTP Injector HTTP" dir=in action=allow protocol=TCP localport=8080
+        netsh advfirewall firewall add rule name="HTTP Injector HTTPS" dir=in action=allow protocol=TCP localport=8443
+        Write-Host "✅ Puertos 8080 (HTTP) y 8443 (HTTPS) abiertos"
+
+    - name: Start HTTP Injector Server
+      run: |
+        Write-Host "🚀 Iniciando servidor HTTP Injector..."
+        $serverDir = "C:\http-injector"
+        
+        # Cambiar al directorio y ejecutar servidor
+        Set-Location $serverDir
+        
+        # Iniciar servidor en segundo plano
+        $serverProcess = Start-Process python -ArgumentList "injector_server.py" -PassThru -WindowStyle Hidden
+        
+        # Guardar PID para poder detenerlo después
+        echo "SERVER_PID=$($serverProcess.Id)" >> $env:GITHUB_ENV
+        
+        Write-Host "⏳ Esperando que el servidor inicie..."
+        Start-Sleep -Seconds 10
         
         # Verificar que está funcionando
-        Start-Sleep -Seconds 5
-        $httpStatus = netstat -an | Select-String ":3128"
-        $socksStatus = netstat -an | Select-String ":1080"
+        $httpStatus = netstat -an | Select-String ":8080"
+        $httpsStatus = netstat -an | Select-String ":8443"
         
-        Write-Host "🔍 Estado HTTP Proxy (3128): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
-        Write-Host "🔍 Estado SOCKS Proxy (1080): $(if($socksStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
+        Write-Host "🔍 Estado HTTP (8080): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
+        Write-Host "🔍 Estado HTTPS (8443): $(if($httpsStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
 
     - name: Show Connection Info
       run: |
         Write-Host ""
-        Write-Host "🎉 ===== PROXY HTTP/SOCKS LISTO ====="
+        Write-Host "🎉 ===== HTTP INJECTOR SERVER LISTO ====="
         Write-Host "📍 IP del Servidor: $env:TAILSCALE_IP"
-        Write-Host "🔑 Usuario: proxy"
-        Write-Host "🔒 Password: $env:PROXY_PASSWORD"
         Write-Host ""
-        Write-Host "🔧 CONFIGURACIÓN HTTP PROXY:"
-        Write-Host "   Puerto: 3128"
-        Write-Host "   Tipo: HTTP/HTTPS"
-        Write-Host "   IP: $env:TAILSCALE_IP:3128"
+        Write-Host "🔗 URLs de Acceso:"
+        Write-Host "   🌐 Panel Web: http://$env:TAILSCALE_IP:8080"
+        Write-Host "   📄 Payload: http://$env:TAILSCALE_IP:8080/payload.txt"
+        Write-Host "   ⚙️ Config: http://$env:TAILSCALE_IP:8080/config.ini"
+        Write-Host "   🔒 HTTPS: https://$env:TAILSCALE_IP:8443"
         Write-Host ""
-        Write-Host "🔧 CONFIGURACIÓN SOCKS5:"
-        Write-Host "   Puerto: 1080" 
-        Write-Host "   Tipo: SOCKS5"
-        Write-Host "   IP: $env:TAILSCALE_IP:1080"
+        Write-Host "📱 Configuración HTTP Injector:"
+        Write-Host "   Host: $env:TAILSCALE_IP"
+        Write-Host "   Port: 8080"
+        Write-Host "   Payload URL: http://$env:TAILSCALE_IP:8080/payload.txt"
         Write-Host ""
         Write-Host "🚀 Velocidad esperada: 200-500 Mbps"
-        Write-Host "⏰ Tiempo restante: 10 minutos"
-        Write-Host "================================"
+        Write-Host "⏰ Tiempo activo: 10 minutos"
+        Write-Host "======================================"
 
-    - name: Maintain Proxy Service
+    - name: Maintain Server
       run: |
         $startTime = Get-Date
         $endTime = $startTime.AddMinutes(10)
@@ -111,13 +309,22 @@ socks -p1080 -i0.0.0.0 -e$env:TAILSCALE_IP
             $remaining = $endTime - (Get-Date)
             $minutes = [math]::Round($remaining.TotalMinutes, 1)
             
-            # Verificar que el proxy sigue activo
-            $httpActive = netstat -an | Select-String ":3128"
-            $socksActive = netstat -an | Select-String ":1080"
+            # Verificar que el servidor sigue activo
+            $httpActive = netstat -an | Select-String ":8080"
+            $httpsActive = netstat -an | Select-String ":8443"
             
-            Write-Host "[$(Get-Date)] Proxy activo - $minutes min restantes - HTTP: $(if($httpActive){'✅'}else{'❌'}) SOCKS: $(if($socksActive){'✅'}else{'❌'})"
+            Write-Host "[$(Get-Date)] Servidor activo - $minutes min - HTTP: $(if($httpActive){'✅'}else{'❌'}) HTTPS: $(if($httpsActive){'✅'}else{'❌'})"
+            
+            # Reiniciar si se cayó
+            if (-not $httpActive -or -not $httpsActive) {
+                Write-Host "🔄 Reiniciando servidor..."
+                Get-Process -Name "python" -ErrorAction SilentlyContinue | Stop-Process -Force
+                Start-Sleep -Seconds 2
+                Set-Location "C:\http-injector"
+                Start-Process python -ArgumentList "injector_server.py" -WindowStyle Hidden
+            }
             
             Start-Sleep -Seconds 30
         }
         
-        Write-Host "🛑 Proxy apagándose..."
+        Write-Host "🛑 Servidor HTTP Injector apagándose..."
