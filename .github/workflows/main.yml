@@ -1,186 +1,126 @@
-name: High Speed HTTP Injector Server
+name: HTTP Proxy Helper
 
 on:
   workflow_dispatch:
 
 jobs:
-  http-injector:
+  proxy-helper:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
-    - name: Install Tailscale
+    - name: Setup Tailscale Connection
       run: |
-        Write-Host "🔧 Instalando Tailscale..."
+        Write-Host "🔧 Configurando conexión segura..."
+        
+        # Instalar Tailscale de forma segura
         $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
         $installerPath = "$env:TEMP\tailscale.msi"
         Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
         Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-injector-$env:GITHUB_RUN_ID
+        
+        # Conectar a Tailscale
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-helper-$env:GITHUB_RUN_ID
         Start-Sleep -Seconds 10
+        
+        # Obtener IP de Tailscale
         $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-        Write-Host "✅ Tailscale IP: $tsIP"
+        Write-Host "✅ IP de Tailscale: $tsIP"
 
-    - name: Create Simple HTTP Server
+    - name: Generate Proxy Configuration
       run: |
-        Write-Host "🛠️ Creando servidor HTTP simple..."
+        Write-Host "📝 Generando configuración para HTTP Injector..."
         
-        # Crear script PowerShell para servidor HTTP
-        $serverScript = @'
-# Servidor HTTP Simple en PowerShell
-$listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://+:8080/")
-$listener.Start()
-Write-Host "🚀 Servidor HTTP iniciado en puerto 8080"
+        # Crear configuración SIN servidor HTTP
+        $configContent = @"
+# 🚀 Configuración para HTTP Injector
+# 📍 Servidor: $env:TAILSCALE_IP
+# ⏰ Generado: $(Get-Date)
 
-# Generar payload para HTTP Injector
-$payload = @"
-# 🚀 HTTP Injector Payload - GitHub Actions
-# 📍 Server: $env:TAILSCALE_IP
+[INFORMACIÓN]
+IP_SERVIDOR = $env:TAILSCALE_IP
+PUERTO = 443
+PROTOCOLO = https
 
-[CONNECTIONS]
-CONNECT [host_port] [protocol][split][ua] HTTP/1.1
+[PAYLOAD_SUGERIDO]
+CONNECT [host_port] HTTP/1.1[crlf][crlf]
+GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
 
-[HEADERS]
-Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+[CONFIGURACIÓN_RECOMENDADA]
+- Usar puerto: 443 (HTTPS)
+- Protocolo: HTTP/HTTPS
+- Payload: Personalizar según operador
+- SNI: mhost.com
 
-[REQUESTS]
-GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
-
-[PORTS]
-80,8080,443,53
-
-[PROTOCOLS]
-http://
-
-[METHODS]
-CONNECT, GET, POST
+[NOTAS]
+1. Esta IP estará activa por 10 minutos
+2. Usar Tailscale en el dispositivo móvil
+3. Configurar HTTP Injector manualmente
 "@
 
-while ($listener.IsListening) {
-    $context = $listener.GetContext()
-    $request = $context.Request
-    $response = $context.Response
-    
-    Write-Host "Solicitud recibida: $($request.Url.PathAndQuery)"
-    
-    # Servir diferentes rutas
-    if ($request.Url.PathAndQuery -eq "/payload.txt") {
-        $buffer = [System.Text.Encoding]::UTF8.GetBytes($payload)
-        $response.ContentType = "text/plain"
-        $response.ContentLength64 = $buffer.Length
-        $response.OutputStream.Write($buffer, 0, $buffer.Length)
-    }
-    elseif ($request.Url.PathAndQuery -eq "/" -or $request.Url.PathAndQuery -eq "/index.html") {
-        $html = @"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>🚀 HTTP Injector Server</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #0d1117; color: white; }
-        .container { max-width: 800px; margin: 0 auto; }
-        .card { background: #161b22; padding: 20px; margin: 10px 0; border-radius: 8px; }
-        .btn { display: inline-block; padding: 10px 20px; margin: 5px; background: #238636; color: white; text-decoration: none; border-radius: 6px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚀 HTTP Injector Server</h1>
-        <div class="card">
-            <h3>📡 Información del Servidor</h3>
-            <p><strong>IP:</strong> $env:TAILSCALE_IP</p>
-            <p><strong>Puerto:</strong> 8080</p>
-            <p><strong>Estado:</strong> ✅ Online</p>
-        </div>
-        <div class="card">
-            <h3>📥 Descargar Payload</h3>
-            <a class="btn" href="/payload.txt">📄 Descargar Payload.txt</a>
-            <p><strong>URL para HTTP Injector:</strong></p>
-            <p>http://$env:TAILSCALE_IP:8080/payload.txt</p>
-        </div>
-        <div class="card">
-            <h3>📱 Cómo usar</h3>
-            <ol>
-                <li>Copia la URL del payload</li>
-                <li>Abre HTTP Injector</li>
-                <li>Añade nueva configuración</li>
-                <li>Pega la URL del payload</li>
-                <li>¡Conecta y disfruta! 🎉</li>
-            </ol>
-        </div>
-    </div>
-</body>
-</html>
+        # Mostrar configuración en logs
+        Write-Host "🔧 CONFIGURACIÓN GENERADA:"
+        Write-Host $configContent
+        
+        # Guardar en variable de entorno
+        echo "PROXY_CONFIG=$configContent" >> $env:GITHUB_ENV
+
+    - name: Create Configuration File
+      run: |
+        Write-Host "💾 Creando archivo de configuración..."
+        
+        # Crear archivo de texto simple (no ejecutable)
+        $configDir = "C:\proxy-config"
+        New-Item -ItemType Directory -Path $configDir -Force
+        
+        $fileContent = @"
+Configuración para HTTP Injector
+================================
+IP del Servidor: $env:TAILSCALE_IP
+Tiempo Activo: 10 minutos
+
+Payload sugerido:
+CONNECT [host_port] HTTP/1.1[crlf][crlf]
+GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+Instrucciones:
+1. Instalar Tailscale en tu celular
+2. Conectar a la misma cuenta
+3. Usar esta IP en HTTP Injector: $env:TAILSCALE_IP
+4. Configurar payload manualmente
 "@
-        $buffer = [System.Text.Encoding]::UTF8.GetBytes($html)
-        $response.ContentType = "text/html"
-        $response.ContentLength64 = $buffer.Length
-        $response.OutputStream.Write($buffer, 0, $buffer.Length)
-    }
-    else {
-        $buffer = [System.Text.Encoding]::UTF8.GetBytes("Ruta no encontrada: $($request.Url.PathAndQuery)")
-        $response.ContentType = "text/plain"
-        $response.ContentLength64 = $buffer.Length
-        $response.OutputStream.Write($buffer, 0, $buffer.Length)
-    }
-    
-    $response.Close()
-}
-'@
 
-        # Guardar y ejecutar servidor en segundo plano
-        $serverScript | Out-File -FilePath "$env:TEMP\http_server.ps1" -Encoding UTF8
-        
-        Write-Host "✅ Servidor HTTP creado"
+        $fileContent | Out-File -FilePath "$configDir\config.txt" -Encoding UTF8
+        Write-Host "✅ Archivo de configuración creado"
 
-    - name: Configure Firewall
-      run: |
-        Write-Host "🔥 Configurando firewall..."
-        # Abrir puerto para el servidor HTTP
-        netsh advfirewall firewall add rule name="HTTP Injector Server" dir=in action=allow protocol=TCP localport=8080
-        Write-Host "✅ Puerto 8080 abierto"
-
-    - name: Start HTTP Server
-      run: |
-        Write-Host "🚀 Iniciando servidor HTTP..."
-        # Ejecutar servidor en segundo plano
-        Start-Process powershell -ArgumentList "-File $env:TEMP\http_server.ps1" -WindowStyle Hidden
-        
-        Write-Host "⏳ Esperando que el servidor inicie..."
-        Start-Sleep -Seconds 5
-        
-        # Verificar que está funcionando
-        $httpStatus = netstat -an | Select-String ":8080"
-        Write-Host "🔍 Estado del servidor (8080): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
-
-    - name: Show Connection Info
+    - name: Show Final Instructions
       run: |
         Write-Host ""
-        Write-Host "🎉 ===== HTTP INJECTOR SERVER LISTO ====="
-        Write-Host "📍 IP del Servidor: $env:TAILSCALE_IP"
+        Write-Host "🎉 ===== CONFIGURACIÓN LISTA ====="
+        Write-Host "📍 IP DE CONEXIÓN: $env:TAILSCALE_IP"
         Write-Host ""
-        Write-Host "🔗 URL DEL PAYLOAD (IMPORTANTE):"
-        Write-Host "   http://$env:TAILSCALE_IP:8080/payload.txt"
+        Write-Host "📱 INSTRUCCIONES PARA HTTP INJECTOR:"
+        Write-Host "   1. Instala Tailscale en tu celular"
+        Write-Host "   2. Conéctate a la misma cuenta"
+        Write-Host "   3. En HTTP Injector, usa:"
+        Write-Host "      - Host: $env:TAILSCALE_IP"
+        Write-Host "      - Puerto: 443 (recomendado)"
+        Write-Host "      - Payload: Personalizado"
         Write-Host ""
-        Write-Host "🌐 Panel Web:"
-        Write-Host "   http://$env:TAILSCALE_IP:8080/"
+        Write-Host "🔧 PAYLOAD SUGERIDO:"
+        Write-Host "   CONNECT [host_port] HTTP/1.1[crlf][crlf]"
+        Write-Host "   GET http://mhost.com/ [protocol][crlf]"
+        Write-Host "   Host: mhost.com[crlf]"
+        Write-Host "   X-Online-Host: mhost.com[crlf]"
+        Write-Host "   Connection: Keep-Alive[crlf][crlf]"
         Write-Host ""
-        Write-Host "📱 Para HTTP Injector:"
-        Write-Host "   1. Copia la URL del payload de arriba"
-        Write-Host "   2. Abre HTTP Injector"
-        Write-Host "   3. Añade nueva configuración"
-        Write-Host "   4. Pega la URL del payload"
-        Write-Host "   5. ¡Conecta! 🎉"
-        Write-Host ""
-        Write-Host "🚀 Velocidad: 200-500 Mbps"
-        Write-Host "⏰ Tiempo: 10 minutos"
+        Write-Host "⏰ Tiempo activo: 10 minutos"
         Write-Host "================================"
 
-    - name: Maintain Server
+    - name: Keep Connection Active
       run: |
-        Write-Host "🔄 Manteniendo servidor activo por 10 minutos..."
+        Write-Host "🔄 Manteniendo conexión activa..."
         $startTime = Get-Date
         $endTime = $startTime.AddMinutes(10)
         
@@ -188,12 +128,13 @@ while ($listener.IsListening) {
             $remaining = $endTime - (Get-Date)
             $minutes = [math]::Round($remaining.TotalMinutes, 1)
             
-            # Verificar que el servidor sigue activo
-            $httpActive = netstat -an | Select-String ":8080"
+            # Verificar que Tailscale sigue conectado
+            $tsStatus = & "$env:ProgramFiles\Tailscale\tailscale.exe" status
+            $isConnected = $tsStatus -like "*Active*"
             
-            Write-Host "[$(Get-Date)] Servidor activo - $minutes min - HTTP: $(if($httpActive){'✅'}else{'❌'})"
+            Write-Host "[$(Get-Date)] Conexión activa - $minutes min - Tailscale: $(if($isConnected){'✅'}else{'❌'})"
             
             Start-Sleep -Seconds 30
         }
         
-        Write-Host "🛑 Servidor HTTP Injector apagándose..."
+        Write-Host "🛑 Conexión finalizada"
