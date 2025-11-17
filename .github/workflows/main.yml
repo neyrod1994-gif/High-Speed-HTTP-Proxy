@@ -1,7 +1,7 @@
 name: High Speed HTTP Proxy
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Esto permite ejecución manual
 
 jobs:
   http-proxy:
@@ -30,8 +30,16 @@ jobs:
         Write-Host "📥 Descargando proxy..."
         Invoke-WebRequest -Uri $proxyUrl -OutFile $proxyPath
         
+        # Crear directorio
+        New-Item -ItemType Directory -Path $installDir -Force
+        
         # Extraer y configurar
         Expand-Archive -Path $proxyPath -DestinationPath $installDir -Force
+        
+        # Generar password aleatorio
+        Add-Type -AssemblyName System.Web
+        $proxyPass = [System.Web.Security.Membership]::GeneratePassword(12, 2)
+        echo "PROXY_PASSWORD=$proxyPass" >> $env:GITHUB_ENV
         
         # Crear configuración del proxy
         $configContent = @"
@@ -40,19 +48,13 @@ nserver 8.8.8.8
 nserver 1.1.1.1
 timeouts 1 5 30 60 180 1800 15 60
 auth strong
-users proxy:CL:$($env:PROXY_PASSWORD)
+users proxy:CL:$proxyPass
 allow proxy
 proxy -p3128 -i0.0.0.0 -e$env:TAILSCALE_IP
 socks -p1080 -i0.0.0.0 -e$env:TAILSCALE_IP
 "@
         
-        # Generar password aleatorio
-        Add-Type -AssemblyName System.Web
-        $proxyPass = [System.Web.Security.Membership]::GeneratePassword(12, 2)
-        echo "PROXY_PASSWORD=$proxyPass" >> $env:GITHUB_ENV
-        
-        $configContent.Replace('$($env:PROXY_PASSWORD)', $proxyPass) | Out-File -FilePath "$installDir\3proxy.cfg" -Encoding ASCII
-        
+        $configContent | Out-File -FilePath "$installDir\3proxy.cfg" -Encoding ASCII
         Write-Host "✅ Proxy configurado"
 
     - name: Configure Firewall for Proxy
@@ -114,14 +116,6 @@ socks -p1080 -i0.0.0.0 -e$env:TAILSCALE_IP
             $socksActive = netstat -an | Select-String ":1080"
             
             Write-Host "[$(Get-Date)] Proxy activo - $minutes min restantes - HTTP: $(if($httpActive){'✅'}else{'❌'}) SOCKS: $(if($socksActive){'✅'}else{'❌'})"
-            
-            # Reiniciar si se cayó
-            if (-not $httpActive -or -not $socksActive) {
-                Write-Host "🔄 Reiniciando proxy..."
-                Get-Process -Name "3proxy" -ErrorAction SilentlyContinue | Stop-Process -Force
-                Start-Sleep -Seconds 2
-                Start-Process -FilePath "C:\3proxy\3proxy.exe" -ArgumentList "C:\3proxy\3proxy.cfg" -WindowStyle Hidden
-            }
             
             Start-Sleep -Seconds 30
         }
