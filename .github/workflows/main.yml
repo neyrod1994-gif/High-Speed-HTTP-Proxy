@@ -30,19 +30,19 @@ jobs:
         $serverDir = "C:\http-injector"
         New-Item -ItemType Directory -Path $serverDir -Force
         
-        # Crear script del servidor Python
-        $serverScript = @"
+        # Crear script Python CORREGIDO
+        $pythonScript = @'
 import http.server
 import socketserver
-import ssl
-import sys
 import threading
+import time
 from datetime import datetime
 
 class InjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
     
     def do_GET(self):
-        # Servir payloads según la ruta
+        print(f"Solicitud recibida: {self.path}")
+        
         if self.path == '/payload.txt':
             self.serve_payload()
         elif self.path == '/config.ini':
@@ -53,9 +53,8 @@ class InjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_index()
     
     def serve_payload(self):
-        payload = '''# 🚀 HTTP Injector Payload - GitHub Actions
-# 📍 Server: $env:TAILSCALE_IP
-# ⏰ Created: $(Get-Date)
+        payload = """# 🚀 HTTP Injector Payload - GitHub Actions
+# Server: localhost
 
 [CONNECTIONS]
 CONNECT [host_port] [protocol][split][ua] HTTP/1.1
@@ -66,15 +65,6 @@ Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[c
 [REQUESTS]
 GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
 
-[REAL_REQUESTS]
-GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
-
-[PROXY_REQUESTS]
-GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
-
-[SPLITTERS]
-[split][crlf]
-
 [PORTS]
 80,8080,443,53
 
@@ -83,201 +73,150 @@ http://
 
 [METHODS]
 CONNECT, GET, POST
-
-[ENCODINGS]
-
-[REDIRECTS]
-
-[PROXIES]
-
-[USERAGENTS]
-'''
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(payload.encode())
+"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(payload.encode('utf-8'))
     
     def serve_config(self):
-        config = '''[SERVER]
-host = $env:TAILSCALE_IP
+        config = """[SERVER]
+host = localhost
 port = 8080
-ssl_port = 8443
 
 [PAYLOAD]
-url = http://$env:TAILSCALE_IP:8080/payload.txt
+url = http://localhost:8080/payload.txt
 update_interval = 3600
-
-[SETTINGS]
-timeout = 30
-max_connections = 1000
-'''
+"""
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(config.encode())
+        self.wfile.write(config.encode('utf-8'))
     
     def serve_status(self):
-        status = f"HTTP Injector Server - Online\nIP: $env:TAILSCALE_IP\nTime: {datetime.now()}\nStatus: ✅ ACTIVE"
+        status = f"HTTP Injector Server - Online\nTime: {datetime.now()}\nStatus: ✅ ACTIVE"
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(status.encode())
+        self.wfile.write(status.encode('utf-8'))
     
     def serve_index(self):
-        html = '''<!DOCTYPE html>
+        html = """<!DOCTYPE html>
 <html>
 <head>
     <title>🚀 HTTP Injector Server</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #0d1117; color: #c9d1d9; }
         .container { max-width: 800px; margin: 0 auto; }
         .card { background: #161b22; padding: 20px; margin: 10px 0; border-radius: 8px; border: 1px solid #30363d; }
         .btn { display: inline-block; padding: 10px 20px; margin: 5px; background: #238636; color: white; text-decoration: none; border-radius: 6px; }
-        .info { background: #0c2d6b; padding: 15px; border-radius: 6px; }
-        .payload { background: #1a1f2e; padding: 15px; border-radius: 6px; font-family: monospace; white-space: pre-wrap; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚀 HTTP Injector Server</h1>
-        
-        <div class="card info">
-            <h3>📡 Server Information</h3>
-            <p><strong>IP:</strong> $env:TAILSCALE_IP</p>
-            <p><strong>HTTP Port:</strong> 8080</p>
-            <p><strong>HTTPS Port:</strong> 8443</p>
-            <p><strong>Status:</strong> ✅ Online</p>
-        </div>
-
         <div class="card">
             <h3>📥 Download Resources</h3>
             <a class="btn" href="/payload.txt">📄 Payload File</a>
             <a class="btn" href="/config.ini">⚙️ Config File</a>
             <a class="btn" href="/status">📊 Server Status</a>
         </div>
-
         <div class="card">
-            <h3>🔧 HTTP Injector Configuration</h3>
-            <div class="payload">
-<strong>Payload URL:</strong> http://$env:TAILSCALE_IP:8080/payload.txt
-
-<strong>Manual Config:</strong>
-- Host: $env:TAILSCALE_IP
-- Port: 8080
-- Payload: Download from above
-            </div>
-        </div>
-
-        <div class="card">
-            <h3>📱 How to Use</h3>
-            <ol>
-                <li>Download payload file</li>
-                <li>Open HTTP Injector app</li>
-                <li>Add new configuration</li>
-                <li>Use payload URL or manual config</li>
-                <li>Connect and enjoy! 🎉</li>
-            </ol>
+            <h3>📱 How to Use in HTTP Injector</h3>
+            <p><strong>Payload URL:</strong> http://IP_TAILSCALE:8080/payload.txt</p>
+            <p>Replace IP_TAILSCALE with your actual Tailscale IP</p>
         </div>
     </div>
 </body>
-</html>'''
+</html>"""
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(html.encode())
+        self.wfile.write(html.encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        print(f"[{datetime.now()}] {format % args}")
 
-def run_http_server():
-    with socketserver.TCPServer(("", 8080), InjectorHTTPHandler) as httpd:
-        print("🚀 HTTP Server running on port 8080")
+def run_server():
+    PORT = 8080
+    with socketserver.TCPServer(("", PORT), InjectorHTTPHandler) as httpd:
+        print(f"🚀 HTTP Injector Server running on port {PORT}")
+        print("📡 Serving payloads at:")
+        print("   http://localhost:8080/payload.txt")
+        print("   http://localhost:8080/config.ini")
+        print("   http://localhost:8080/")
         httpd.serve_forever()
 
-def run_https_server():
-    with socketserver.TCPServer(("", 8443), InjectorHTTPHandler) as httpd:
-        httpd.socket = ssl.wrap_socket(httpd.socket, certfile='./cert.pem', server_side=True)
-        print("🔒 HTTPS Server running on port 8443")
-        httpd.serve_forever()
-
-# Generar certificado SSL auto-firmado
-import subprocess
-subprocess.run(['openssl', 'req', '-new', '-x509', '-keyout', 'cert.pem', '-out', 'cert.pem', '-days', '365', '-nodes', '-subj', '/CN=localhost'], shell=True)
-
-# Ejecutar servidores en hilos separados
-http_thread = threading.Thread(target=run_http_server)
-https_thread = threading.Thread(target=run_https_server)
-
-http_thread.daemon = True
-https_thread.daemon = True
-
-http_thread.start()
-https_thread.start()
-
-print("🎯 Servidores HTTP/HTTPS iniciados!")
-print("📡 Serviendo payloads en:")
-print("   HTTP:  http://$env:TAILSCALE_IP:8080")
-print("   HTTPS: https://$env:TAILSCALE_IP:8443")
-
-# Mantener el script corriendo
-import time
-while True:
-    time.sleep(1)
-"@
+if __name__ == "__main__":
+    run_server()
+'@
 
         # Guardar script del servidor
-        $serverScript | Out-File -FilePath "$serverDir\injector_server.py" -Encoding UTF8
-        
-        Write-Host "✅ Servidor HTTP Injector creado"
+        $pythonScript | Out-File -FilePath "$serverDir\server.py" -Encoding UTF8
+        Write-Host "✅ Servidor HTTP Injector creado en $serverDir"
 
-    - name: Install Python and Dependencies
+    - name: Install Python
       run: |
-        Write-Host "🐍 Instalando Python y dependencias..."
-        
-        # Instalar Python si no está presente
-        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            Write-Host "📥 Descargando Python..."
-            $pythonUrl = "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
-            $pythonInstaller = "$env:TEMP\python-installer.exe"
-            Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonInstaller
-            Start-Process -FilePath $pythonInstaller -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0" -Wait
+        Write-Host "🐍 Verificando Python..."
+        # Verificar si Python está instalado
+        if (Get-Command python -ErrorAction SilentlyContinue) {
+            Write-Host "✅ Python ya está instalado"
+        } else {
+            Write-Host "📥 Instalando Python..."
+            # Instalar Python portable
+            $pythonUrl = "https://www.python.org/ftp/python/3.11.0/python-3.11.0-embed-amd64.zip"
+            $pythonZip = "$env:TEMP\python.zip"
+            $pythonDir = "C:\Python311"
+            
+            Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonZip
+            Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
+            $env:Path = "$pythonDir;" + $env:Path
+            [Environment]::SetEnvironmentVariable("Path", $env:Path, "Process")
         }
         
-        # Instalar OpenSSL para certificados
-        & "$env:ProgramFiles\Git\usr\bin\curl" -L -o openssl.zip https://github.com/openssl/openssl/archive/refs/tags/openssl-3.0.7.zip
-        if (Test-Path openssl.zip) {
-            Expand-Archive -Path openssl.zip -DestinationPath "C:\openssl" -Force
-        }
+        # Verificar Python
+        python --version
 
     - name: Configure Firewall
       run: |
         Write-Host "🔥 Configurando firewall..."
-        # Abrir puertos para el servidor HTTP Injector
-        netsh advfirewall firewall add rule name="HTTP Injector HTTP" dir=in action=allow protocol=TCP localport=8080
-        netsh advfirewall firewall add rule name="HTTP Injector HTTPS" dir=in action=allow protocol=TCP localport=8443
-        Write-Host "✅ Puertos 8080 (HTTP) y 8443 (HTTPS) abiertos"
+        # Abrir puerto para el servidor HTTP
+        netsh advfirewall firewall add rule name="HTTP Injector" dir=in action=allow protocol=TCP localport=8080
+        Write-Host "✅ Puerto 8080 abierto en el firewall"
 
-    - name: Start HTTP Injector Server
+    - name: Start HTTP Server
       run: |
         Write-Host "🚀 Iniciando servidor HTTP Injector..."
         $serverDir = "C:\http-injector"
         
-        # Cambiar al directorio y ejecutar servidor
+        # Cambiar al directorio del servidor
         Set-Location $serverDir
         
         # Iniciar servidor en segundo plano
-        $serverProcess = Start-Process python -ArgumentList "injector_server.py" -PassThru -WindowStyle Hidden
+        $serverJob = Start-Job -ScriptBlock {
+            Set-Location "C:\http-injector"
+            python server.py
+        }
         
-        # Guardar PID para poder detenerlo después
-        echo "SERVER_PID=$($serverProcess.Id)" >> $env:GITHUB_ENV
+        # Guardar ID del job
+        echo "SERVER_JOB_ID=$($serverJob.Id)" >> $env:GITHUB_ENV
         
         Write-Host "⏳ Esperando que el servidor inicie..."
-        Start-Sleep -Seconds 10
+        Start-Sleep -Seconds 5
         
         # Verificar que está funcionando
         $httpStatus = netstat -an | Select-String ":8080"
-        $httpsStatus = netstat -an | Select-String ":8443"
+        Write-Host "🔍 Estado del servidor (8080): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
         
-        Write-Host "🔍 Estado HTTP (8080): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
-        Write-Host "🔍 Estado HTTPS (8443): $(if($httpsStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
+        if ($httpStatus) {
+            Write-Host "🎉 Servidor iniciado correctamente!"
+        } else {
+            Write-Host "❌ Error: Servidor no inició"
+        }
 
     - name: Show Connection Info
       run: |
@@ -285,16 +224,16 @@ while True:
         Write-Host "🎉 ===== HTTP INJECTOR SERVER LISTO ====="
         Write-Host "📍 IP del Servidor: $env:TAILSCALE_IP"
         Write-Host ""
-        Write-Host "🔗 URLs de Acceso:"
-        Write-Host "   🌐 Panel Web: http://$env:TAILSCALE_IP:8080"
-        Write-Host "   📄 Payload: http://$env:TAILSCALE_IP:8080/payload.txt"
-        Write-Host "   ⚙️ Config: http://$env:TAILSCALE_IP:8080/config.ini"
-        Write-Host "   🔒 HTTPS: https://$env:TAILSCALE_IP:8443"
+        Write-Host "🔗 URLs IMPORTANTES:"
+        Write-Host "   📄 Payload URL: http://$env:TAILSCALE_IP:8080/payload.txt"
+        Write-Host "   ⚙️ Config URL: http://$env:TAILSCALE_IP:8080/config.ini"
+        Write-Host "   🌐 Panel Web: http://$env:TAILSCALE_IP:8080/"
         Write-Host ""
-        Write-Host "📱 Configuración HTTP Injector:"
-        Write-Host "   Host: $env:TAILSCALE_IP"
-        Write-Host "   Port: 8080"
-        Write-Host "   Payload URL: http://$env:TAILSCALE_IP:8080/payload.txt"
+        Write-Host "📱 Para HTTP Injector:"
+        Write-Host "   1. Abre HTTP Injector"
+        Write-Host "   2. Añade nueva configuración"
+        Write-Host "   3. Usa esta URL: http://$env:TAILSCALE_IP:8080/payload.txt"
+        Write-Host "   4. Conecta y disfruta! 🎉"
         Write-Host ""
         Write-Host "🚀 Velocidad esperada: 200-500 Mbps"
         Write-Host "⏰ Tiempo activo: 10 minutos"
@@ -302,6 +241,7 @@ while True:
 
     - name: Maintain Server
       run: |
+        Write-Host "🔄 Manteniendo servidor activo..."
         $startTime = Get-Date
         $endTime = $startTime.AddMinutes(10)
         
@@ -311,20 +251,23 @@ while True:
             
             # Verificar que el servidor sigue activo
             $httpActive = netstat -an | Select-String ":8080"
-            $httpsActive = netstat -an | Select-String ":8443"
             
-            Write-Host "[$(Get-Date)] Servidor activo - $minutes min - HTTP: $(if($httpActive){'✅'}else{'❌'}) HTTPS: $(if($httpsActive){'✅'}else{'❌'})"
+            Write-Host "[$(Get-Date)] Servidor activo - $minutes minutos restantes - Estado: $(if($httpActive){'✅ ACTIVO'}else{'❌ INACTIVO'})"
             
             # Reiniciar si se cayó
-            if (-not $httpActive -or -not $httpsActive) {
+            if (-not $httpActive) {
                 Write-Host "🔄 Reiniciando servidor..."
-                Get-Process -Name "python" -ErrorAction SilentlyContinue | Stop-Process -Force
+                Get-Job -Id $env:SERVER_JOB_ID -ErrorAction SilentlyContinue | Remove-Job -Force
                 Start-Sleep -Seconds 2
                 Set-Location "C:\http-injector"
-                Start-Process python -ArgumentList "injector_server.py" -WindowStyle Hidden
+                Start-Job -ScriptBlock {
+                    Set-Location "C:\http-injector"
+                    python server.py
+                }
             }
             
             Start-Sleep -Seconds 30
         }
         
-        Write-Host "🛑 Servidor HTTP Injector apagándose..."
+        Write-Host "🛑 Apagando servidor HTTP Injector..."
+        Get-Job -ErrorAction SilentlyContinue | Remove-Job -Force
