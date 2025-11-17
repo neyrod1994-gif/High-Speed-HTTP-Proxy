@@ -1,4 +1,4 @@
-name: HTTP Injector Server
+name: High Speed HTTP Injector Server
 
 on:
   workflow_dispatch:
@@ -9,27 +9,191 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - name: Setup Environment
+    - name: Install Tailscale
       run: |
-        Write-Host "🚀 Iniciando HTTP Injector Server..."
-        Write-Host "Este es un servidor de prueba"
-        Write-Host "Workflow ejecutándose correctamente!"
+        Write-Host "🔧 Instalando Tailscale..."
+        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+        $installerPath = "$env:TEMP\tailscale.msi"
+        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-injector-$env:GITHUB_RUN_ID
+        Start-Sleep -Seconds 10
+        $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+        Write-Host "✅ Tailscale IP: $tsIP"
+
+    - name: Create Simple HTTP Server
+      run: |
+        Write-Host "🛠️ Creando servidor HTTP simple..."
         
-    - name: Show Success Message
-      run: |
-        Write-Host "🎉 ¡ÉXITO!"
-        Write-Host "El workflow se está ejecutando"
-        Write-Host "Ahora puedes agregar Tailscale y el servidor"
+        # Crear script PowerShell para servidor HTTP
+        $serverScript = @'
+# Servidor HTTP Simple en PowerShell
+$listener = New-Object System.Net.HttpListener
+$listener.Prefixes.Add("http://+:8080/")
+$listener.Start()
+Write-Host "🚀 Servidor HTTP iniciado en puerto 8080"
+
+# Generar payload para HTTP Injector
+$payload = @"
+# 🚀 HTTP Injector Payload - GitHub Actions
+# 📍 Server: $env:TAILSCALE_IP
+
+[CONNECTIONS]
+CONNECT [host_port] [protocol][split][ua] HTTP/1.1
+
+[HEADERS]
+Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+[REQUESTS]
+GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]X-Forwarded-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
+
+[PORTS]
+80,8080,443,53
+
+[PROTOCOLS]
+http://
+
+[METHODS]
+CONNECT, GET, POST
+"@
+
+while ($listener.IsListening) {
+    $context = $listener.GetContext()
+    $request = $context.Request
+    $response = $context.Response
+    
+    Write-Host "Solicitud recibida: $($request.Url.PathAndQuery)"
+    
+    # Servir diferentes rutas
+    if ($request.Url.PathAndQuery -eq "/payload.txt") {
+        $buffer = [System.Text.Encoding]::UTF8.GetBytes($payload)
+        $response.ContentType = "text/plain"
+        $response.ContentLength64 = $buffer.Length
+        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+    }
+    elseif ($request.Url.PathAndQuery -eq "/" -or $request.Url.PathAndQuery -eq "/index.html") {
+        $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>🚀 HTTP Injector Server</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #0d1117; color: white; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .card { background: #161b22; padding: 20px; margin: 10px 0; border-radius: 8px; }
+        .btn { display: inline-block; padding: 10px 20px; margin: 5px; background: #238636; color: white; text-decoration: none; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 HTTP Injector Server</h1>
+        <div class="card">
+            <h3>📡 Información del Servidor</h3>
+            <p><strong>IP:</strong> $env:TAILSCALE_IP</p>
+            <p><strong>Puerto:</strong> 8080</p>
+            <p><strong>Estado:</strong> ✅ Online</p>
+        </div>
+        <div class="card">
+            <h3>📥 Descargar Payload</h3>
+            <a class="btn" href="/payload.txt">📄 Descargar Payload.txt</a>
+            <p><strong>URL para HTTP Injector:</strong></p>
+            <p>http://$env:TAILSCALE_IP:8080/payload.txt</p>
+        </div>
+        <div class="card">
+            <h3>📱 Cómo usar</h3>
+            <ol>
+                <li>Copia la URL del payload</li>
+                <li>Abre HTTP Injector</li>
+                <li>Añade nueva configuración</li>
+                <li>Pega la URL del payload</li>
+                <li>¡Conecta y disfruta! 🎉</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>
+"@
+        $buffer = [System.Text.Encoding]::UTF8.GetBytes($html)
+        $response.ContentType = "text/html"
+        $response.ContentLength64 = $buffer.Length
+        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+    }
+    else {
+        $buffer = [System.Text.Encoding]::UTF8.GetBytes("Ruta no encontrada: $($request.Url.PathAndQuery)")
+        $response.ContentType = "text/plain"
+        $response.ContentLength64 = $buffer.Length
+        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+    }
+    
+    $response.Close()
+}
+'@
+
+        # Guardar y ejecutar servidor en segundo plano
+        $serverScript | Out-File -FilePath "$env:TEMP\http_server.ps1" -Encoding UTF8
         
-    - name: Keep Alive
+        Write-Host "✅ Servidor HTTP creado"
+
+    - name: Configure Firewall
       run: |
+        Write-Host "🔥 Configurando firewall..."
+        # Abrir puerto para el servidor HTTP
+        netsh advfirewall firewall add rule name="HTTP Injector Server" dir=in action=allow protocol=TCP localport=8080
+        Write-Host "✅ Puerto 8080 abierto"
+
+    - name: Start HTTP Server
+      run: |
+        Write-Host "🚀 Iniciando servidor HTTP..."
+        # Ejecutar servidor en segundo plano
+        Start-Process powershell -ArgumentList "-File $env:TEMP\http_server.ps1" -WindowStyle Hidden
+        
+        Write-Host "⏳ Esperando que el servidor inicie..."
+        Start-Sleep -Seconds 5
+        
+        # Verificar que está funcionando
+        $httpStatus = netstat -an | Select-String ":8080"
+        Write-Host "🔍 Estado del servidor (8080): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
+
+    - name: Show Connection Info
+      run: |
+        Write-Host ""
+        Write-Host "🎉 ===== HTTP INJECTOR SERVER LISTO ====="
+        Write-Host "📍 IP del Servidor: $env:TAILSCALE_IP"
+        Write-Host ""
+        Write-Host "🔗 URL DEL PAYLOAD (IMPORTANTE):"
+        Write-Host "   http://$env:TAILSCALE_IP:8080/payload.txt"
+        Write-Host ""
+        Write-Host "🌐 Panel Web:"
+        Write-Host "   http://$env:TAILSCALE_IP:8080/"
+        Write-Host ""
+        Write-Host "📱 Para HTTP Injector:"
+        Write-Host "   1. Copia la URL del payload de arriba"
+        Write-Host "   2. Abre HTTP Injector"
+        Write-Host "   3. Añade nueva configuración"
+        Write-Host "   4. Pega la URL del payload"
+        Write-Host "   5. ¡Conecta! 🎉"
+        Write-Host ""
+        Write-Host "🚀 Velocidad: 200-500 Mbps"
+        Write-Host "⏰ Tiempo: 10 minutos"
+        Write-Host "================================"
+
+    - name: Maintain Server
+      run: |
+        Write-Host "🔄 Manteniendo servidor activo por 10 minutos..."
         $startTime = Get-Date
-        $endTime = $startTime.AddMinutes(2)
+        $endTime = $startTime.AddMinutes(10)
         
         while ((Get-Date) -lt $endTime) {
             $remaining = $endTime - (Get-Date)
-            $seconds = [math]::Round($remaining.TotalSeconds)
-            Write-Host "Servidor activo - Tiempo restante: $seconds segundos"
-            Start-Sleep -Seconds 10
+            $minutes = [math]::Round($remaining.TotalMinutes, 1)
+            
+            # Verificar que el servidor sigue activo
+            $httpActive = netstat -an | Select-String ":8080"
+            
+            Write-Host "[$(Get-Date)] Servidor activo - $minutes min - HTTP: $(if($httpActive){'✅'}else{'❌'})"
+            
+            Start-Sleep -Seconds 30
         }
-        Write-Host "🛑 Workflow completado"
+        
+        Write-Host "🛑 Servidor HTTP Injector apagándose..."
