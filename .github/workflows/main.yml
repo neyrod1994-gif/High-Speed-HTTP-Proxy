@@ -1,0 +1,129 @@
+name: High Speed HTTP Proxy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  http-proxy:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Install Tailscale
+      run: |
+        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+        $installerPath = "$env:TEMP\tailscale.msi"
+        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-proxy-$env:GITHUB_RUN_ID
+        Start-Sleep -Seconds 10
+        $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+    - name: Install and Configure HTTP Proxy
+      run: |
+        # Descargar e instalar proxy ligero (3proxy)
+        $proxyUrl = "https://github.com/3proxy/3proxy/releases/download/0.9.4/3proxy-0.9.4-x64.zip"
+        $proxyPath = "$env:TEMP\3proxy.zip"
+        $installDir = "C:\3proxy"
+        
+        Write-Host "📥 Descargando proxy..."
+        Invoke-WebRequest -Uri $proxyUrl -OutFile $proxyPath
+        
+        # Extraer y configurar
+        Expand-Archive -Path $proxyPath -DestinationPath $installDir -Force
+        
+        # Crear configuración del proxy
+        $configContent = @"
+daemon
+nserver 8.8.8.8
+nserver 1.1.1.1
+timeouts 1 5 30 60 180 1800 15 60
+auth strong
+users proxy:CL:$($env:PROXY_PASSWORD)
+allow proxy
+proxy -p3128 -i0.0.0.0 -e$env:TAILSCALE_IP
+socks -p1080 -i0.0.0.0 -e$env:TAILSCALE_IP
+"@
+        
+        # Generar password aleatorio
+        Add-Type -AssemblyName System.Web
+        $proxyPass = [System.Web.Security.Membership]::GeneratePassword(12, 2)
+        echo "PROXY_PASSWORD=$proxyPass" >> $env:GITHUB_ENV
+        
+        $configContent.Replace('$($env:PROXY_PASSWORD)', $proxyPass) | Out-File -FilePath "$installDir\3proxy.cfg" -Encoding ASCII
+        
+        Write-Host "✅ Proxy configurado"
+
+    - name: Configure Firewall for Proxy
+      run: |
+        # Abrir puertos para el proxy
+        netsh advfirewall firewall add rule name="HTTP Proxy" dir=in action=allow protocol=TCP localport=3128
+        netsh advfirewall firewall add rule name="SOCKS Proxy" dir=in action=allow protocol=TCP localport=1080
+        Write-Host "🔥 Puertos 3128 (HTTP) y 1080 (SOCKS) abiertos"
+
+    - name: Start Proxy Server
+      run: |
+        Write-Host "🚀 Iniciando servidor proxy..."
+        $installDir = "C:\3proxy"
+        
+        # Iniciar proxy en segundo plano
+        Start-Process -FilePath "$installDir\3proxy.exe" -ArgumentList "$installDir\3proxy.cfg" -WindowStyle Hidden
+        
+        # Verificar que está funcionando
+        Start-Sleep -Seconds 5
+        $httpStatus = netstat -an | Select-String ":3128"
+        $socksStatus = netstat -an | Select-String ":1080"
+        
+        Write-Host "🔍 Estado HTTP Proxy (3128): $(if($httpStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
+        Write-Host "🔍 Estado SOCKS Proxy (1080): $(if($socksStatus) {'✅ ACTIVO'} else {'❌ INACTIVO'})"
+
+    - name: Show Connection Info
+      run: |
+        Write-Host ""
+        Write-Host "🎉 ===== PROXY HTTP/SOCKS LISTO ====="
+        Write-Host "📍 IP del Servidor: $env:TAILSCALE_IP"
+        Write-Host "🔑 Usuario: proxy"
+        Write-Host "🔒 Password: $env:PROXY_PASSWORD"
+        Write-Host ""
+        Write-Host "🔧 CONFIGURACIÓN HTTP PROXY:"
+        Write-Host "   Puerto: 3128"
+        Write-Host "   Tipo: HTTP/HTTPS"
+        Write-Host "   IP: $env:TAILSCALE_IP:3128"
+        Write-Host ""
+        Write-Host "🔧 CONFIGURACIÓN SOCKS5:"
+        Write-Host "   Puerto: 1080" 
+        Write-Host "   Tipo: SOCKS5"
+        Write-Host "   IP: $env:TAILSCALE_IP:1080"
+        Write-Host ""
+        Write-Host "🚀 Velocidad esperada: 200-500 Mbps"
+        Write-Host "⏰ Tiempo restante: 10 minutos"
+        Write-Host "================================"
+
+    - name: Maintain Proxy Service
+      run: |
+        $startTime = Get-Date
+        $endTime = $startTime.AddMinutes(10)
+        
+        while ((Get-Date) -lt $endTime) {
+            $remaining = $endTime - (Get-Date)
+            $minutes = [math]::Round($remaining.TotalMinutes, 1)
+            
+            # Verificar que el proxy sigue activo
+            $httpActive = netstat -an | Select-String ":3128"
+            $socksActive = netstat -an | Select-String ":1080"
+            
+            Write-Host "[$(Get-Date)] Proxy activo - $minutes min restantes - HTTP: $(if($httpActive){'✅'}else{'❌'}) SOCKS: $(if($socksActive){'✅'}else{'❌'})"
+            
+            # Reiniciar si se cayó
+            if (-not $httpActive -or -not $socksActive) {
+                Write-Host "🔄 Reiniciando proxy..."
+                Get-Process -Name "3proxy" -ErrorAction SilentlyContinue | Stop-Process -Force
+                Start-Sleep -Seconds 2
+                Start-Process -FilePath "C:\3proxy\3proxy.exe" -ArgumentList "C:\3proxy\3proxy.cfg" -WindowStyle Hidden
+            }
+            
+            Start-Sleep -Seconds 30
+        }
+        
+        Write-Host "🛑 Proxy apagándose..."
