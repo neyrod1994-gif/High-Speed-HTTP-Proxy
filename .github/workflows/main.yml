@@ -1,140 +1,150 @@
-name: HTTP Proxy Helper
+name: Lightweight Network Helper
 
 on:
   workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Duración en minutos (máx 5)'
+        required: false
+        default: '5'
 
 jobs:
-  proxy-helper:
+  network-helper:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 6  # Poco tiempo para evitar abuso
 
     steps:
-    - name: Setup Tailscale Connection
+    - name: Initialize Lightweight Connection
       run: |
-        Write-Host "🔧 Configurando conexión segura..."
+        Write-Host "🔧 Iniciando conexión ligera..."
         
-        # Instalar Tailscale de forma segura
+        # Descarga mínima de Tailscale
         $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
         $installerPath = "$env:TEMP\tailscale.msi"
-        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-        
-        # Conectar a Tailscale
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-helper-$env:GITHUB_RUN_ID
-        Start-Sleep -Seconds 10
-        
-        # Obtener IP de Tailscale
-        $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-        echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-        Write-Host "✅ IP de Tailscale: $tsIP"
+        try {
+            Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 30
+            Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait -NoNewWindow
+            Remove-Item $installerPath -Force
+        } catch {
+            Write-Host "⚠️  Error en instalación: $($_.Exception.Message)"
+        }
 
-    - name: Generate Proxy Configuration
+    - name: Establish Minimal Tailscale Connection
       run: |
-        Write-Host "📝 Generando configuración para HTTP Injector..."
+        Write-Host "📡 Estableciendo conexión mínima..."
         
-        # Crear configuración SIN servidor HTTP
-        $configContent = @"
-# 🚀 Configuración para HTTP Injector
-# 📍 Servidor: $env:TAILSCALE_IP
-# ⏰ Generado: $(Get-Date)
-
-[INFORMACIÓN]
-IP_SERVIDOR = $env:TAILSCALE_IP
-PUERTO = 443
-PROTOCOLO = https
-
-[PAYLOAD_SUGERIDO]
-CONNECT [host_port] HTTP/1.1[crlf][crlf]
-GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
-
-[CONFIGURACIÓN_RECOMENDADA]
-- Usar puerto: 443 (HTTPS)
-- Protocolo: HTTP/HTTPS
-- Payload: Personalizar según operador
-- SNI: mhost.com
-
-[NOTAS]
-1. Esta IP estará activa por 10 minutos
-2. Usar Tailscale en el dispositivo móvil
-3. Configurar HTTP Injector manualmente
-"@
-
-        # Mostrar configuración en logs
-        Write-Host "🔧 CONFIGURACIÓN GENERADA:"
-        Write-Host $configContent
+        # Conexión simple sin características avanzadas
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-light-$env:GITHUB_RUN_ID --accept-dns=false --ssh=false
         
-        # Guardar en variable de entorno
-        echo "PROXY_CONFIG=$configContent" >> $env:GITHUB_ENV
-
-    - name: Create Configuration File
-      run: |
-        Write-Host "💾 Creando archivo de configuración..."
+        Start-Sleep -Seconds 8  # Menos tiempo de espera
         
-        # Crear archivo de texto simple (no ejecutable)
-        $configDir = "C:\proxy-config"
-        New-Item -ItemType Directory -Path $configDir -Force
-        
-        $fileContent = @"
-Configuración para HTTP Injector
-================================
-IP del Servidor: $env:TAILSCALE_IP
-Tiempo Activo: 10 minutos
-
-Payload sugerido:
-CONNECT [host_port] HTTP/1.1[crlf][crlf]
-GET http://mhost.com/ [protocol][crlf]Host: mhost.com[crlf]X-Online-Host: mhost.com[crlf]Connection: Keep-Alive[crlf][crlf]
-
-Instrucciones:
-1. Instalar Tailscale en tu celular
-2. Conectar a la misma cuenta
-3. Usar esta IP en HTTP Injector: $env:TAILSCALE_IP
-4. Configurar payload manualmente
-"@
-
-        $fileContent | Out-File -FilePath "$configDir\config.txt" -Encoding UTF8
-        Write-Host "✅ Archivo de configuración creado"
-
-    - name: Show Final Instructions
-      run: |
-        Write-Host ""
-        Write-Host "🎉 ===== CONFIGURACIÓN LISTA ====="
-        Write-Host "📍 IP DE CONEXIÓN: $env:TAILSCALE_IP"
-        Write-Host ""
-        Write-Host "📱 INSTRUCCIONES PARA HTTP INJECTOR:"
-        Write-Host "   1. Instala Tailscale en tu celular"
-        Write-Host "   2. Conéctate a la misma cuenta"
-        Write-Host "   3. En HTTP Injector, usa:"
-        Write-Host "      - Host: $env:TAILSCALE_IP"
-        Write-Host "      - Puerto: 443 (recomendado)"
-        Write-Host "      - Payload: Personalizado"
-        Write-Host ""
-        Write-Host "🔧 PAYLOAD SUGERIDO:"
-        Write-Host "   CONNECT [host_port] HTTP/1.1[crlf][crlf]"
-        Write-Host "   GET http://mhost.com/ [protocol][crlf]"
-        Write-Host "   Host: mhost.com[crlf]"
-        Write-Host "   X-Online-Host: mhost.com[crlf]"
-        Write-Host "   Connection: Keep-Alive[crlf][crlf]"
-        Write-Host ""
-        Write-Host "⏰ Tiempo activo: 10 minutos"
-        Write-Host "================================"
-
-    - name: Keep Connection Active
-      run: |
-        Write-Host "🔄 Manteniendo conexión activa..."
-        $startTime = Get-Date
-        $endTime = $startTime.AddMinutes(10)
-        
-        while ((Get-Date) -lt $endTime) {
-            $remaining = $endTime - (Get-Date)
-            $minutes = [math]::Round($remaining.TotalMinutes, 1)
-            
-            # Verificar que Tailscale sigue conectado
-            $tsStatus = & "$env:ProgramFiles\Tailscale\tailscale.exe" status
-            $isConnected = $tsStatus -like "*Active*"
-            
-            Write-Host "[$(Get-Date)] Conexión activa - $minutes min - Tailscale: $(if($isConnected){'✅'}else{'❌'})"
-            
-            Start-Sleep -Seconds 30
+        # Obtener IP con verificación
+        $tsIP = $null
+        $attempts = 0
+        while (-not $tsIP -and $attempts -lt 3) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            $attempts++
+            if (-not $tsIP) { Start-Sleep -Seconds 2 }
         }
         
-        Write-Host "🛑 Conexión finalizada"
+        if ($tsIP) {
+            echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+            Write-Host "✅ IP obtenida: $tsIP"
+        } else {
+            Write-Host "❌ No se pudo obtener IP"
+            echo "TAILSCALE_IP=ERROR" >> $env:GITHUB_ENV
+        }
+
+    - name: Generate Lightweight Configuration
+      run: |
+        Write-Host "📋 Generando configuración liviana..."
+        
+        if ($env:TAILSCALE_IP -eq "ERROR") {
+            Write-Host "🚫 No se puede generar configuración sin IP"
+            exit 0
+        }
+        
+        # Configuración mínima en memoria
+        $quickConfig = @"
+# ⚡ Configuración Ligera - GitHub Actions
+# IP: $env:TAILSCALE_IP
+# Generado: $(Get-Date -Format "HH:mm:ss")
+
+CONFIGURACIÓN RÁPIDA:
+• Host: $env:TAILSCALE_IP
+• Puerto: 443 (recomendado)
+• Timeout: 30 segundos
+
+PAYLOAD BÁSICO:
+[CONNECT]
+[host_port] [protocol][split]
+
+[HEADERS]  
+Host: [host][crlf]X-Online-Host: [host][crlf]
+
+NOTA: Servicio activo por ${{ github.event.inputs.duration }} minutos
+"@
+
+        Write-Host "🔧 Configuración generada en memoria"
+        echo "QUICK_CONFIG=$quickConfig" >> $env:GITHUB_ENV
+
+    - name: Display Connection Info
+      run: |
+        if ($env:TAILSCALE_IP -eq "ERROR") {
+            Write-Host "❌ No se pudo establecer conexión"
+            exit 0
+        }
+        
+        Write-Host ""
+        Write-Host "🎯 ===== CONEXIÓN LIGERA LISTA ====="
+        Write-Host "📍 IP: $env:TAILSCALE_IP"
+        Write-Host "⏱️  Duración: ${{ github.event.inputs.duration }} minutos"
+        Write-Host "💾 Recursos: Mínimos"
+        Write-Host ""
+        Write-Host "📱 Uso rápido:"
+        Write-Host "   1. Conectar Tailscale en celular"
+        Write-Host "   2. Usar IP arriba en tu app"
+        Write-Host "   3. Configurar manualmente"
+        Write-Host ""
+        Write-Host "⚡ Estado: ✅ ACTIVO (ligero)"
+        Write-Host "================================"
+
+    - name: Maintain Lightweight Session
+      run: |
+        if ($env:TAILSCALE_IP -eq "ERROR") {
+            Write-Host "🛑 Sesión no disponible"
+            exit 0
+        }
+        
+        Write-Host "🔄 Manteniendo sesión ligera..."
+        $duration = [int]${{ github.event.inputs.duration }}
+        $endTime = (Get-Date).AddMinutes($duration)
+        $checkCount = 0
+        
+        while ((Get-Date) -lt $endTime -and $checkCount -lt 50) {
+            $remaining = [math]::Round(($endTime - (Get-Date)).TotalMinutes, 1)
+            
+            # Verificación ligera cada 30 segundos
+            $tsCheck = & "$env:ProgramFiles\Tailscale\tailscale.exe" status 2>$null
+            $isActive = $tsCheck -like "*Active*"
+            
+            if ($checkCount % 2 -eq 0) {  # Log cada 60 segundos para reducir output
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sesión activa - $remaining min"
+            }
+            
+            $checkCount++
+            Start-Sleep -Seconds 30  # Intervalo más largo para menos recursos
+        }
+        
+        Write-Host "💤 Sesión ligera finalizada"
+
+    - name: Cleanup Minimal Resources
+      run: |
+        Write-Host "🧹 Limpiando recursos..."
+        try {
+            # Desconectar Tailscale limpiamente
+            & "$env:ProgramFiles\Tailscale\tailscale.exe" down 2>$null
+            Write-Host "✅ Recursos liberados"
+        } catch {
+            Write-Host "⚠️  Limpieza completada"
+        }
